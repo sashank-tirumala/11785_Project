@@ -61,18 +61,26 @@ class ClothDataModule(pl.LightningDataModule):
 
 
 class ClothDataSet(Dataset):
-    # It's possible to load test set data using ImageFolder without making a custom class.
-    # See if you can think it through!
 
     def __init__(self, data_dir, transforms):
         self.data_dir = data_dir
         self.transforms = transforms
 
-
+    def setup(self, normalizer):
+        """
+        store it in an array of arrays [[ x, y], [x, y] and so] x is a 2D Array btw, 
+        normalize the entire dataset (only x)
+        shuffle the data completely (shuffling within a particular dataset is fine, just not across datasets)
+        store it in some variable
+        """
+        pass
     def __len__(self):
         return len(self.img_paths)
     
     def __getitem__(self, idx):
+        """
+        Think of what data augmentations you want to perform before finally outputting your code
+        """
         return self.transforms(Image.open(self.img_paths[idx]))
 
 def get_file_paths(data_dirs, reskin_file = "reskin_data.csv" ):
@@ -83,7 +91,7 @@ def get_file_paths(data_dirs, reskin_file = "reskin_data.csv" ):
     """
     if(type(data_dirs) == str):
         data_dirs = [data_dirs]
-    reskin_paths = {"0cloth":[], "1cloth":[], "2cloth": [], "3cloth": []}
+    reskin_paths = {"-1cloth":[],"0cloth":[], "1cloth":[], "2cloth": [], "3cloth": []}
     for data_dir in data_dirs:
         class_dirs = os.listdir(data_dir)
         for class_dir in class_dirs:
@@ -101,24 +109,57 @@ def get_file_paths(data_dirs, reskin_file = "reskin_data.csv" ):
                     reskin_paths["3cloth"].append(reskin_file_path)
     return reskin_paths
 
-def create_data_array(reskin_paths, context):
+def create_data_dict(reskin_paths, context, get_context,  offset=-1, time_idx = -1, class_idx = -2, include_transition = False, context_type = "double"):
     """
     Input: paths to reskin files dictionary
     Output: dictionary with data bunched up by context. (Context values before and Context values after)
     """
-    
-    pass
+    res_dict = dict.fromkeys(reskin_paths.keys(),[])
+    for key, val in reskin_paths.items():
+        data = []
+        for path in val:
+            data = np.loadtxt(path, delimiter=",")
+            context_data = get_context(data, context,  offset, time_idx, class_idx, include_transition, context_type)
+            for key in context_data.keys():
+                res_dict[key] = context_data[key] + res_dict[key]
+    return res_dict
+
+def get_context(data, context, offset=-1, time_idx = -1, class_idx = -2, include_transition = False, context_type = "double"):
+    """
+    Input: 2D np array -> raw data from reskin csv file
+    Output: dictionary with class followed context values
+    """
+    res = {}
+    start_idx = context
+    if(context_type == "double"):
+        end_idx = data.shape[0] - context - 1
+    elif(context_type == "left"):
+        end_idx =  data.shape[0]
+    else:
+        print("Invalid context type")
+        return None
+    for i in np.arange(start_idx, end_idx, 1):
+        
+        if(context_type == "double"):
+            cur_val = np.array(data[i-context: i+context+1,:])
+        elif(context_type == "left"):
+            cur_val = np.array(data[i-context:i,:])
+        else:
+            print("Invalid context type")
+            return None
+        bool_arr = cur_val[:,class_idx] == cur_val[0,class_idx]
+        if(np.all(bool_arr) or include_transition): #Checks if the value is in a transition or not --> For now removing, I can disable this 
+            label = str(int(cur_val[0,class_idx])+offset)+"cloth"
+            if label not in res.keys():
+                res[label] = []
+            res[label] += [np.delete(cur_val, [ time_idx], axis=1)]
+
+    return res
 
 if(__name__ == "__main__"):
     dirn = str(ROOT_DIR) + "/data/angled_feb25_all"
     res = get_file_paths(dirn)
-    arr = np.loadtxt(res["0cloth"][0], delimiter=",")
-    print(arr[500:600,:])
-    arr = np.loadtxt(res["1cloth"][0], delimiter=",")
-    print(arr[500:600,:])
-    arr = np.loadtxt(res["2cloth"][0], delimiter=",")
-    print(arr[500:600,:])
-    arr = np.loadtxt(res["3cloth"][0], delimiter=",")
-    print(arr[500:600,:])
-    
-    pass
+    # arr = np.loadtxt(res["0cloth"][0], delimiter=",")
+    # res = get_context(arr, 5, context_type = "left")
+    res=create_data_dict(res, 5, get_context)
+    print(len(res["-1cloth"]))
