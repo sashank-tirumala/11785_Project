@@ -24,6 +24,84 @@ import logging
 import matplotlib.pyplot as plt
 from init import *
 import numpy as np
+import random
+def get_file_paths(data_dirs, reskin_file = "reskin_data.csv" ):
+    """
+    Input: is a ratio of training to validation split. They should sum up to 100 and paths to directories.
+    Output: Paths to maintain this split across each class (The main idea being to approximately
+    maintain the same ratio. 0 will still be dominant but rest of the classes should be equal in datapoints roughly )
+    """
+    if(type(data_dirs) == str):
+        data_dirs = [data_dirs]
+    reskin_paths = {"-1cloth":[],"0cloth":[], "1cloth":[], "2cloth": [], "3cloth": []}
+    for data_dir in data_dirs:
+        class_dirs = os.listdir(data_dir)
+        for class_dir in class_dirs:
+            temp = []
+            path_dirs = os.listdir(data_dir + "/" + class_dir)
+            for path_dir in path_dirs:
+                reskin_file_path = data_dir + "/" + class_dir + "/" + path_dir + "/" + reskin_file
+                if("0cloth" in class_dir):
+                    reskin_paths["0cloth"].append(reskin_file_path)
+                elif("1cloth" in class_dir):
+                    reskin_paths["1cloth"].append(reskin_file_path)
+                elif("2cloth" in class_dir):
+                    reskin_paths["2cloth"].append(reskin_file_path)
+                elif("3cloth" in class_dir):
+                    reskin_paths["3cloth"].append(reskin_file_path)
+    return reskin_paths
+
+def get_context(data, context, offset=-1, time_idx = -1, class_idx = -2, include_transition = False, context_type = "double"):
+    """
+    Input: 2D np array -> raw data from reskin csv file
+    Output: dictionary with class followed context values
+    """
+    res = []
+    start_idx = context
+    if(context_type == "double"):
+        end_idx = data.shape[0] - context - 1
+    elif(context_type == "left"):
+        end_idx =  data.shape[0]
+    else:
+        print("Invalid context type")
+        return None
+    for i in np.arange(start_idx, end_idx, 1):
+        
+        if(context_type == "double"):
+            cur_val = np.array(data[i-context: i+context+1,:])
+        elif(context_type == "left"):
+            cur_val = np.array(data[i-context:i,:])
+        else:
+            print("Invalid context type")
+            return None
+        bool_arr = cur_val[:,class_idx] == cur_val[0,class_idx]
+        if(np.all(bool_arr) or include_transition): #Checks if the value is in a transition or not --> For now removing, I can disable this 
+            label = int(cur_val[0,class_idx])+offset
+            res.append([np.delete(cur_val, [time_idx, class_idx], axis=1), label])
+    return res
+
+def std_normalizer(data):
+    x_vals = []
+    for dat in data:
+        x_vals.append(dat[0])
+    x_vals = np.hstack(x_vals)
+    x_mean  = np.mean(x_vals, axis=0).reshape(1,-1)
+    x_std = np.std(x_vals, axis=0).reshape(1,-1)
+    for dat in data:
+        res_x = np.zeros(dat[0].shape)
+        for col in range(dat[0].shape[1]):
+            res_x[:,col] = dat[0][:,col] - x_mean[0, col]
+            res_x[:,col] = res_x[:,col] /(x_std[0, col]+1e-6)
+        dat[0] = res_x
+    return data
+
+def get_data(paths):
+    data = []
+    for path in paths:
+        temp = np.loadtxt(path, delimiter=",")
+        data.append(temp)
+    return data
+
 class ClothDataModule(pl.LightningDataModule):
     def __init__(self, train_dir, val_dir, test_dir, shuffle, batch_size=256):
         super().__init__()
@@ -61,105 +139,57 @@ class ClothDataModule(pl.LightningDataModule):
 
 
 class ClothDataSet(Dataset):
-
-    def __init__(self, data_dir, transforms):
-        self.data_dir = data_dir
+    def __init__(self, paths, transforms, context = 5, normalizer = std_normalizer, get_context = get_context, label_offset = -1,
+    time_idx = -1, class_idx = -2, include_transition = False, context_type = "double", shuffle=True):
+        self.paths = paths
         self.transforms = transforms
+        self.normalizer = std_normalizer
+        self.get_context = get_context
+        self.label_offset = label_offset
+        self.time_idx = time_idx
+        self.class_idx = class_idx
+        self.include_transition = include_transition
+        self.context_type = context_type
+        self.data = 0
+        self.shuffle = shuffle
+        self.context = context
+        self.setup()
 
-    def setup(self, normalizer):
+    def setup(self):
         """
         store it in an array of arrays [[ x, y], [x, y] and so] x is a 2D Array btw, 
         normalize the entire dataset (only x)
         shuffle the data completely (shuffling within a particular dataset is fine, just not across datasets)
         store it in some variable
         """
-        pass
+        self.data = get_data(self.paths)
+        temp = []
+        for data in self.data:
+            temp=temp+get_context(data, self.context, self.label_offset, self.time_idx, self.class_idx, self.include_transition, self.context_type)
+        self.data = temp
+        self.data = self.normalizer(self.data)
+        if(self.shuffle):
+            random.shuffle(self.data)
     def __len__(self):
-        return len(self.img_paths)
+        return self.data.shape[0]
     
     def __getitem__(self, idx):
         """
         Think of what data augmentations you want to perform before finally outputting your code
         """
-        return self.transforms(Image.open(self.img_paths[idx]))
+        #TODO perform transforms
+        return self.data[idx]
 
-def get_file_paths(data_dirs, reskin_file = "reskin_data.csv" ):
-    """
-    Input: is a ratio of training to validation split. They should sum up to 100 and paths to directories.
-    Output: Paths to maintain this split across each class (The main idea being to approximately
-    maintain the same ratio. 0 will still be dominant but rest of the classes should be equal in datapoints roughly )
-    """
-    if(type(data_dirs) == str):
-        data_dirs = [data_dirs]
-    reskin_paths = {"-1cloth":[],"0cloth":[], "1cloth":[], "2cloth": [], "3cloth": []}
-    for data_dir in data_dirs:
-        class_dirs = os.listdir(data_dir)
-        for class_dir in class_dirs:
-            temp = []
-            path_dirs = os.listdir(data_dir + "/" + class_dir)
-            for path_dir in path_dirs:
-                reskin_file_path = data_dir + "/" + class_dir + "/" + path_dir + "/" + reskin_file
-                if("0cloth" in class_dir):
-                    reskin_paths["0cloth"].append(reskin_file_path)
-                elif("1cloth" in class_dir):
-                    reskin_paths["1cloth"].append(reskin_file_path)
-                elif("2cloth" in class_dir):
-                    reskin_paths["2cloth"].append(reskin_file_path)
-                elif("3cloth" in class_dir):
-                    reskin_paths["3cloth"].append(reskin_file_path)
-    return reskin_paths
-
-def create_data_dict(reskin_paths, context, get_context,  offset=-1, time_idx = -1, class_idx = -2, include_transition = False, context_type = "double"):
-    """
-    Input: paths to reskin files dictionary
-    Output: dictionary with data bunched up by context. (Context values before and Context values after)
-    """
-    res_dict = dict.fromkeys(reskin_paths.keys(),[])
-    for key, val in reskin_paths.items():
-        data = []
-        for path in val:
-            data = np.loadtxt(path, delimiter=",")
-            context_data = get_context(data, context,  offset, time_idx, class_idx, include_transition, context_type)
-            for key in context_data.keys():
-                res_dict[key] = context_data[key] + res_dict[key]
-    return res_dict
-
-def get_context(data, context, offset=-1, time_idx = -1, class_idx = -2, include_transition = False, context_type = "double"):
-    """
-    Input: 2D np array -> raw data from reskin csv file
-    Output: dictionary with class followed context values
-    """
-    res = {}
-    start_idx = context
-    if(context_type == "double"):
-        end_idx = data.shape[0] - context - 1
-    elif(context_type == "left"):
-        end_idx =  data.shape[0]
-    else:
-        print("Invalid context type")
-        return None
-    for i in np.arange(start_idx, end_idx, 1):
-        
-        if(context_type == "double"):
-            cur_val = np.array(data[i-context: i+context+1,:])
-        elif(context_type == "left"):
-            cur_val = np.array(data[i-context:i,:])
-        else:
-            print("Invalid context type")
-            return None
-        bool_arr = cur_val[:,class_idx] == cur_val[0,class_idx]
-        if(np.all(bool_arr) or include_transition): #Checks if the value is in a transition or not --> For now removing, I can disable this 
-            label = str(int(cur_val[0,class_idx])+offset)+"cloth"
-            if label not in res.keys():
-                res[label] = []
-            res[label] += [np.delete(cur_val, [ time_idx], axis=1)]
-
-    return res
 
 if(__name__ == "__main__"):
     dirn = str(ROOT_DIR) + "/data/angled_feb25_all"
     res = get_file_paths(dirn)
-    # arr = np.loadtxt(res["0cloth"][0], delimiter=",")
-    # res = get_context(arr, 5, context_type = "left")
-    res=create_data_dict(res, 5, get_context)
-    print(len(res["-1cloth"]))
+    paths = res["0cloth"]
+    # dat = get_data(res["0cloth"])
+    # temp = []
+    # for data in dat:
+    #     temp=temp+get_context(data, 5)
+    # data = temp
+    # data = std_normalizer(data)
+    data = ClothDataSet(paths, None)
+    print(data[10])
