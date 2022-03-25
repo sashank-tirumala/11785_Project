@@ -103,44 +103,64 @@ def get_data(paths):
     return data
 
 class ClothDataModule(pl.LightningDataModule):
-    def __init__(self, train_dir, val_dir, test_dir, shuffle, batch_size=256):
+    def __init__(self, data_dirs, shuffle=True, context = 10, batch_size=256, train_val_test_split=[0.7, 0.2, 0.1]):
         super().__init__()
         self.batch_size = batch_size
         self.train_transform = ttf.Compose([ttf.ToTensor()])
         self.val_transform = ttf.Compose([ttf.ToTensor()])
         self.test_transform = ttf.Compose([ttf.ToTensor()])
-        self.train_dir = train_dir
-        self.val_dir = val_dir
-        self.test_dir = test_dir
+        self.data_dirs=data_dirs
+        self.train_paths = []
+        self.val_paths = []
+        self.test_paths = []
         self.num_workers = 4
         self.shuffle = shuffle
+        self.train_val_test_split = train_val_test_split
+        self.context = context
+        self.setup_paths()
+        # print(len(self.train_paths))
+        # print(len(self.val_paths))
+        # print(len(self.test_paths))
+        self.cloth_train_dataset = 0
+        self.cloth_test_dataset = 0
+        self.cloth_val_dataset = 0
+
+    
+    def setup_paths(self):
+        paths = get_file_paths(self.data_dirs)
+        for key in paths.keys():
+            if(self.shuffle):
+                random.shuffle(paths[key])
+            else:
+                pass
+            train_num = int(self.train_val_test_split[0]*len(paths[key]))
+            val_num = int(self.train_val_test_split[1]*len(paths[key]))
+            # print(train_num, val_num, len(paths[key]))
+            self.train_paths+=paths[key][:train_num]
+            self.val_paths+=paths[key][train_num:train_num+val_num]
+            self.test_paths+=paths[key][train_num+val_num:]
+    
     def setup(self, stage: Optional[str] = None):
         if stage == "fit" or stage is None:
-            self.face_recognition_train = torchvision.datasets.ImageFolder(self.train_dir,
-                                                    transform=self.train_transform)
+            self.cloth_train_dataset = ClothDataSet(self.train_paths, transforms=None, context= self.context)
         if stage == "test" or stage is None:
-            self.face_recognition_test = ClassificationTestSet(self.test_dir, self.test_transform)
-
+            self.cloth_test_dataset = ClothDataSet(self.test_paths, transforms=None, context= self.context)
         if stage == "validate" or stage is None:
-            self.face_recognition_val = torchvision.datasets.ImageFolder(self.val_dir, transform = self.val_transform)
+            self.cloth_val_dataset = ClothDataSet(self.val_paths, transforms=None, context= self.context)
 
     def train_dataloader(self):
-        # tensor_image = self.face_recognition_train[0][0]
-        # plt.figure()
-        # plt.imshow(tensor_image.permute(1, 2, 0))
-        # plt.show()
-        return DataLoader(self.face_recognition_train, batch_size=self.batch_size, shuffle=True, drop_last=True, num_workers= self.num_workers) 
+        return DataLoader(self.cloth_train_dataset, batch_size=self.batch_size, shuffle=True, drop_last=True, num_workers= self.num_workers) 
 
     def test_dataloader(self):
-        return DataLoader(self.face_recognition_test, batch_size=self.batch_size, shuffle=False, drop_last=True, num_workers= self.num_workers) 
+        return DataLoader(self.cloth_test_dataset, batch_size=self.batch_size, shuffle=False, drop_last=True, num_workers= self.num_workers) 
     
     def val_dataloader(self):
-        return DataLoader(self.face_recognition_val, batch_size=self.batch_size, shuffle=False, drop_last=True, num_workers= self.num_workers)
+        return DataLoader(self.cloth_val_dataset, batch_size=self.batch_size, shuffle=False, drop_last=True, num_workers= self.num_workers)
 
 
 class ClothDataSet(Dataset):
     def __init__(self, paths, transforms, context = 5, normalizer = std_normalizer, get_context = get_context, label_offset = -1,
-    time_idx = -1, class_idx = -2, include_transition = False, context_type = "double", shuffle=True):
+    time_idx = -1, class_idx = -2, include_transition = False, context_type = "double", shuffle=True, flatten = True):
         self.paths = paths
         self.transforms = transforms
         self.normalizer = std_normalizer
@@ -153,6 +173,7 @@ class ClothDataSet(Dataset):
         self.data = 0
         self.shuffle = shuffle
         self.context = context
+        self.flatten = flatten
         self.setup()
 
     def setup(self):
@@ -171,25 +192,31 @@ class ClothDataSet(Dataset):
         if(self.shuffle):
             random.shuffle(self.data)
     def __len__(self):
-        return self.data.shape[0]
+        return len(self.data)
     
     def __getitem__(self, idx):
         """
         Think of what data augmentations you want to perform before finally outputting your code
         """
         #TODO perform transforms
+        if 
         return self.data[idx]
 
 
 if(__name__ == "__main__"):
     dirn = str(ROOT_DIR) + "/data/angled_feb25_all"
-    res = get_file_paths(dirn)
-    paths = res["0cloth"]
-    # dat = get_data(res["0cloth"])
-    # temp = []
-    # for data in dat:
-    #     temp=temp+get_context(data, 5)
-    # data = temp
-    # data = std_normalizer(data)
-    data = ClothDataSet(paths, None)
-    print(data[10])
+    cdm = ClothDataModule(dirn)
+    cdm.setup()
+    tdlr = cdm.train_dataloader()
+    x,y = next(iter(tdlr))
+    print(x,y)
+    # res = get_file_paths(dirn)
+    # paths = res["0cloth"]
+    # # dat = get_data(res["0cloth"])
+    # # temp = []
+    # # for data in dat:
+    # #     temp=temp+get_context(data, 5)
+    # # data = temp
+    # # data = std_normalizer(data)
+    # data = ClothDataSet(paths, None)
+    # print(data[10])
